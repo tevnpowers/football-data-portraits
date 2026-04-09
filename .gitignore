@@ -1,0 +1,5 @@
+# pycache files
+*.pyc
+
+# web driver lock files
+downloaded_files
