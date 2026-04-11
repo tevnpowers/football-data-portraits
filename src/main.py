@@ -1,43 +1,65 @@
-#!/Users/tevnpowers/miniconda3/envs/sports-analysis/bin/python3
 # Selenium base tutorial: https://www.zenrows.com/blog/selenium-cloudflare-bypass#seleniumbase
+
+# built-in libraries
 import time
 from datetime import datetime
 from typing import Dict
+
+# installed libraries
+from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeElapsedColumn, MofNCompleteColumn, TimeRemainingColumn
 from seleniumbase import Driver
 from seleniumbase.core import sb_driver
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+
+# project modules
 from player import Player
 
 # seconds to sleep between API calls
 API_RATE_LIMIT = 10
+
+# Seconds to disconnect chrome driver
+# to prevent bot detection
 UC_RECONNECT_TIME = 10
 
 # HTML element ID tags
 META_INFO_BUTTON_ID = 'meta_more_button'
 BIRTH_INFO_ID = 'necro-birth'
 
+# NFL Draft year range
+FIRST_DRAFT_YEAR = 1937
+LAST_DRAFT_YEAR = 2025
+
+# First row in draft table with player info
 FIRST_PLAYER_ROW = 2
 
-# Column indices for player table properties
+# Column indices for player properties in draft table
 NAME_IDX = 2
 POSITION_IDX = 3
 DRAFT_PICK_IDX = 0
 DRAFT_TEAM_IDX = 1
 COLLEGE_INDEX = 26
 
-draft_year = 2025
-
-nfl_players: Dict[Player, Player] = {}
-colleges = {}
-high_schools = {}
-
-def api_sleep(seconds: int) -> None:
-	# print(f'Sleeping for {seconds} seconds for API rate limit...')
+def rate_limit_api_calls(seconds: int) -> None:
 	time.sleep(seconds)
 
-def add_players_from_draft(year: int, driver: sb_driver.DriverMethods) -> None:
-	print(f'Opening {year} draft url...')
+def get_drafted_players(year: int, driver: sb_driver.DriverMethods, progress: Progress = None) -> Dict[int, list[Player]]:
+	'''Get basic info of players drafted to the NFL in the given year.
+
+	Arguments:
+	year -- the draft year
+	driver -- driver for web browser
+	progress -- context manager for progress bar
+
+	Return value: dictionary where keys are draft rounds and values
+	are the list of drafted players in the corresponding round.
+	'''
+	# Dictionary of players by round. Keys are draft rounds.
+	# Values are lists of players drafted in that round.
+	players: Dict[int, list[Player]] = {}
+
+	if progress:
+		progress.console.print(f'Opening {year} draft url...')
 
 	# set the target URL based on the year
 	url = f'https://www.pro-football-reference.com/years/{year}/draft.htm'
@@ -45,41 +67,55 @@ def add_players_from_draft(year: int, driver: sb_driver.DriverMethods) -> None:
 	# open URL using UC mode with 6 second reconnect time to bypass initial detection
 	driver.uc_open_with_reconnect(url, reconnect_time=UC_RECONNECT_TIME)
 
-	print(f'Loaded page: {driver.title}')
+	if progress:
+		progress.console.print(f'Loaded page: {driver.title}')
+
 	assert 'NFL Draft Listing' in driver.title
 
 	# attempt to click the CAPTCHA checkbox if present
 	driver.uc_gui_click_captcha()
 
+	# Get the table of drafted players by element ID
 	table = driver.find_element('id', 'drafts')
 
-	rows = table.find_elements('tag name', 'tr') # get all of the rows in the table
+	# Get all rows in the table by the <tr> html tag
+	rows = table.find_elements('tag name', 'tr')
+
+	# Loop through each row in the table that represents an NFL player.
+	# Extract and store the basic info about each player row.
 	player_count = 0
 	for i in range(FIRST_PLAYER_ROW, len(rows)):
 		row = rows[i]
-		# print(row.text)
 
-		th_cols = row.find_elements('tag name', 'th')
+
+		# The <td> HTML element defines cells in the row that contain player data
 		td_cols = row.find_elements('tag name', 'td')
 
-		# rows with all <th> elements, and no <td> elements are
-		# header rows that we don't need to process for player info
+		# Skip rows that don't contain player info
 		if not td_cols:
 			continue
 
+		# The <th> (table header) HTML elements in a row contains the player's draft round
+		th_cols = row.find_elements('tag name', 'th')
+		
+		# TODO: Check if this always evaluates to true. What to do when it doesn't?
 		draft_round = 0
 		if th_cols:
 			draft_round = int(th_cols[0].text)
 
+		# On the website, a player's profile can be reached by clicking
+		# their name in the table. Here we extract the url from this <a>
+		# anchor element in the column with a player's name.
 		url = ''
 		href = td_cols[NAME_IDX].find_element('tag name', 'a')
 		if href:
 			url = href.get_attribute('href')
 
+		# Initialize a Player object with the info available from the table
 		player = Player(
 			td_cols[NAME_IDX].text,
 			td_cols[POSITION_IDX].text,
-			draft_year,
+			year,
 			draft_round,
 			int(td_cols[DRAFT_PICK_IDX].text),
 			td_cols[DRAFT_TEAM_IDX].text,
@@ -87,88 +123,155 @@ def add_players_from_draft(year: int, driver: sb_driver.DriverMethods) -> None:
 			url
 		)
 
-		nfl_players[player] = player
+		# If this is the first player drafted in the current round
+		# we need to initialize an empty list for players to be appended to.
+		if player.draft_round not in players:
+			players[player.draft_round] = []
+
+		# Add the current player to the list associated with their round
+		players[player.draft_round].append(player)
 		player_count += 1
 
-	print(f'Found {player_count} players from {year} draft.')
+	if progress:
+		progress.console.print(f'Found {player_count} players from {year} draft.')
 
-def update_player_info(player: Player, driver: sb_driver.DriverMethods) -> Player:
-	if player in nfl_players:
-		if nfl_players[player].url:
-			print(f'Opening player profile for {nfl_players[player].name} ({nfl_players[player].position})...')
-			driver.uc_open_with_reconnect(nfl_players[player].url, reconnect_time=UC_RECONNECT_TIME)
+	return players
 
-			# Check if the "More bio info" button is present on the player profile page
-			meta_buttons = driver.find_elements('id', META_INFO_BUTTON_ID)
-			
-			# If the button is present, we need to click it to reveal the player bio info
-			if meta_buttons:
-				# The ID should be unique, so we assert the length should be 1
-				assert len(meta_buttons) == 1
+def get_player_details(player: Player, driver: sb_driver.DriverMethods, progress: Progress = None) -> Player:
+	'''Get bio info for and NFL player from their profile.
 
-				print('Expanding player bio information...')
-				# Click the button to reveal the info we want
-				meta_buttons[0].click()
+	Arguments:
+	player -- a player object with basic info about a player
+	driver -- driver for web browser
+	progress -- context manager for progress bar
 
-			# Check for the span that contains birthday and birth place info
-			birth_info = driver.find_elements('id', BIRTH_INFO_ID)
-			if birth_info:
-				# The ID should be unique, so we assert the length should be 1
-				assert len(birth_info) == 1
+	Return value: An updated player object.
+	'''
+	# If the player has a url for a profile, we can scrape their
+	# information from that web page.
+	if player.url:
+		if progress:
+			progress.console.print(f'Opening player profile for {player.name} ({player.position})...')
+		driver.uc_open_with_reconnect(player.url, reconnect_time=UC_RECONNECT_TIME)
 
-				print(f'Birth info: {birth_info[0].text}')
+		# Check if the "More bio info" button is present on the player profile page.
+		meta_buttons = driver.find_elements('id', META_INFO_BUTTON_ID)
+		
+		# If the button is present, we need to click it to expand the player bio info.
+		# Only visible content on the screen can be extracted.
+		if meta_buttons:
+			# The ID should be unique, so we assert the length should be 1
+			assert len(meta_buttons) == 1
 
-				# Birthday is stored on the data-birth property in YYYY-MM-DD format
-				data_birth = birth_info[0].get_attribute('data-birth')
-				if data_birth:
-					player.birthday = datetime.strptime(data_birth, '%Y-%m-%d')
-					# print(f'{player.name}\'s birthday: {player.birthday.strftime('%m-%d-%Y')}')
+			if progress:
+				progress.console.print('Expanding player bio information...')
 
-				# Location info, if present, will be stored in an inner <span> element
-				birth_place = birth_info[0].find_element('tag name', 'span')
-				# print(f'Birth place: {birth_place.text}')
-				if birth_place.text:
-					# state
-					state_link = birth_place.find_elements('tag name', 'a')
-					if state_link:
-						player.birth_state = state_link[0].text
+			# Click the button to reveal the player info we want
+			meta_buttons[0].click()
 
-						# city
-						player.birth_city = birth_place.text[3:(-2 - len(player.birth_state))]
-						# print(f'Player birth info: {player.birth_city} ({player.birth_state})')
-					else:
-						# state or country if we get here
-						player.birth_state = birth_place.text[3:]
-						# print(f'Player birth info: ({player.birth_state})')
-		else:
-			print(f'No profile url found for: {nfl_players[player].name} ({nfl_players[player].position})')
+		# Check for the span that contains birthday and birth place info
+		birth_info = driver.find_elements('id', BIRTH_INFO_ID)
+		if birth_info:
+			# The ID should be unique, so we assert the length should be 1
+			assert len(birth_info) == 1
+
+			# Birthday is stored on the data-birth property in YYYY-MM-DD format
+			data_birth = birth_info[0].get_attribute('data-birth')
+			if data_birth:
+				player.birthday = datetime.strptime(data_birth, '%Y-%m-%d')
+
+			# Location info, if present, will be stored in an inner <span> element
+			birth_place = birth_info[0].find_element('tag name', 'span')
+			if birth_place.text:
+				# If the birth place span has an anchor element, then the
+				# pattern appears to be that the text in that anchor is
+				# a state abbreviation.
+				state_link = birth_place.find_elements('tag name', 'a')
+				if state_link:
+					state = state_link[0].text
+					
+					# There is likely a city preceding the state.
+					# The format is often: "in [CITY], [STATE]"
+					# Slice the string to omit the word "in" and any characters
+					# belonging to the text corresponding to the state.
+					city = birth_place.text[3:(-2 - len(state))]
+					player.set_birth_location(city, state)
+				else:
+					# If there is no anchor link present, then the text likely
+					# references a country and does not include city info.
+					player.set_birth_location('', birth_place.text[3:])
 	else:
-		print(f'Player not found in dictionary: {player}')
+		# If there is no URL associated with the player then there's no
+		# additional info we can add.
+		if progress:
+			progress.console.print(f'No profile url found for: {player.name} ({player.position})')
+
+
+	# Return the (potentially) updated Player
 	return player
 
 if __name__ == '__main__':
 	print('Script beginning...')
 
-	# initialize the driver in GUI mode with UC enabled
+	# initialize the driver in GUI mode with
+	# UC (Undetected-Chromedriver Mode) mode on.
+	# UC mode allows bots to appear humans.
 	driver = Driver(uc=True, headless=False)
 
-	# Setup wait for later
-	# wait = WebDriverWait(driver, 10)
-
-	# Check we don't have other windows open already
+	# Check that we don't have other windows open already
 	assert len(driver.window_handles) == 1
 
-	# Add players from 2025 draft
-	add_players_from_draft(2025, driver)
+	# Configure columns for the progress bars in the terminal
+	with Progress(SpinnerColumn(),
+			TextColumn("[progress.description]{task.description}"),
+			BarColumn(),
+			TaskProgressColumn(),
+			TimeRemainingColumn(),
+			TimeElapsedColumn(),
+			MofNCompleteColumn()) as progress:
+		# Dictionary of drafted NFL players
+		nfl_players: Dict[Player, Player] = {}
 
-	# sleep for 10 seconds before making any other API calls
-	api_sleep(API_RATE_LIMIT)
+		# The list of all NFL draft years
+		nfl_drafts = sorted(list(range(FIRST_DRAFT_YEAR, LAST_DRAFT_YEAR + 1)), reverse=True)
 
+		# Progress bar associated with processing all NFL drafts
+		task_nfl_drafts = progress.add_task(f'[green]Processing all NFL Drafts...', total=len(nfl_drafts))
 
-	for key in nfl_players.keys():
-		nfl_players[key] = update_player_info(key, driver)
-		print(f'Updated player: {nfl_players[key]}')
-		api_sleep(API_RATE_LIMIT)
+		# For each draft year, get info associated with each player drafted
+		for draft_year in nfl_drafts:
+			# Get players from the current year's draft
+			drafted_players: Dict[int, list[Player]] = get_drafted_players(draft_year, driver, progress)
+
+			# Progress bar associated with each player in the current draft.
+			total_players = [draftee for draftees in drafted_players.values() for draftee in draftees]
+			task_total_players = progress.add_task(f'[red]Players in the {draft_year} draft...', total=len(total_players))
+
+			# sleep before making any other API calls to respect the rate limit
+			rate_limit_api_calls(API_RATE_LIMIT)
+
+			# Iterate round by round through all players in the current year's draft
+			# to check for more detailed info on their profile page.
+			for round in sorted(drafted_players.keys()):
+				# Progress bar associated with each player in the current draft and round.
+				players_in_round_task = progress.add_task(f'[cyan]Players in Round {round} of {draft_year} draft...', total=len(drafted_players[round]))
+
+				# Visit each player's pro-football reference profile for more details
+				for player in drafted_players[round]:
+					# nfl_players[player] = get_player_details(player, driver, progress)
+					nfl_players[player] = player
+
+					# Update progress bars, advancing them one player update
+					progress.update(players_in_round_task, advance=1)
+					progress.update(task_total_players, advance=1)
+
+					progress.console.print(f'Updated player: {nfl_players[player]}')
+
+					# sleep before making any other API calls to respect the rate limit
+					# rate_limit_api_calls(API_RATE_LIMIT)
+
+			# Update progress bar, advancing one completed NFL draft
+			progress.update(task_nfl_drafts, advance=1)
 
 	# close the browser and end the session
 	driver.quit()
