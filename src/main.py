@@ -258,8 +258,7 @@ if __name__ == '__main__':
 
 				# Visit each player's pro-football reference profile for more details
 				for player in drafted_players[round]:
-					# nfl_players[player] = get_player_details(player, driver, progress)
-					nfl_players[player] = player
+					nfl_players[player] = get_player_details(player, driver, progress)
 
 					# Update progress bars, advancing them one player update
 					progress.update(players_in_round_task, advance=1)
@@ -268,7 +267,7 @@ if __name__ == '__main__':
 					progress.console.print(f'Updated player: {nfl_players[player]}')
 
 					# sleep before making any other API calls to respect the rate limit
-					# rate_limit_api_calls(API_RATE_LIMIT)
+					rate_limit_api_calls(API_RATE_LIMIT)
 
 			# Update progress bar, advancing one completed NFL draft
 			progress.update(task_nfl_drafts, advance=1)
