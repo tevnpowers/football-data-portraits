@@ -56,7 +56,52 @@ OUTPUT_DIRECTORY = 'output/'
 def rate_limit_api_calls(seconds: int) -> None:
 	time.sleep(seconds)
 
-def get_drafted_players(year: int, driver: sb_driver.DriverMethods, progress: Progress = None) -> Dict[int, list[Player]]:
+def get_draft_links(driver: sb_driver.DriverMethods, progress: Progress = None) -> list[tuple]:
+	if progress:
+		progress.console.print(f'Getting all NFL/AFL draft history...')
+
+	url = 'https://www.pro-football-reference.com/draft/'
+	driver.uc_open_with_reconnect(url, reconnect_time=UC_RECONNECT_TIME)
+
+	if progress:
+		progress.console.print(f'Loaded page: {driver.title}')
+
+	# attempt to click the CAPTCHA checkbox if present
+	driver.uc_gui_click_captcha()
+
+	# Get the table of drafted players by element ID
+	table = driver.find_element('id', 'draft_years')
+
+	# Get all rows in the table by the <tr> html tag
+	rows = table.find_elements('tag name', 'tr')
+
+	draft_info = []
+
+	# Skip the first row, which is a header for the table
+	for i in range(1, len(rows)):
+		row = rows[i]
+		
+		# The <td> HTML element defines cells in the row that contain player data
+		td_cols = row.find_elements('tag name', 'td')
+
+		# Skip rows that don't contain draft info
+		if not td_cols:
+			continue
+
+		# The <th> (table header) HTML element in a row contains the draft year and url
+		th_cols = row.find_elements('tag name', 'th')
+		assert len(th_cols) == 1
+
+		# Save draft info in a tuple, add it to the list
+		draft_year = int(th_cols[0].text)
+		draft_url = th_cols[0].find_element('tag name', 'a').get_attribute('href')
+		league = td_cols[0].text
+
+		draft_info.append((draft_year, league, draft_url))
+
+	return draft_info
+
+def get_drafted_players(url: str, year: int, driver: sb_driver.DriverMethods, progress: Progress = None) -> Dict[int, list[Player]]:
 	'''Get basic info of players drafted to the NFL in the given year.
 
 	Arguments:
@@ -72,10 +117,7 @@ def get_drafted_players(year: int, driver: sb_driver.DriverMethods, progress: Pr
 	players: Dict[int, list[Player]] = {}
 
 	if progress:
-		progress.console.print(f'Opening {year} draft url...')
-
-	# set the target URL based on the year
-	url = f'https://www.pro-football-reference.com/years/{year}/draft.htm'
+		progress.console.print(f'Opening {year} draft url: {url}')
 
 	# open URL using UC mode with 6 second reconnect time to bypass initial detection
 	driver.uc_open_with_reconnect(url, reconnect_time=UC_RECONNECT_TIME)
@@ -326,18 +368,22 @@ if __name__ == '__main__':
 			# Dictionary of drafted NFL players
 			nfl_players: Dict[Player, Player] = {}
 
-			# TODO: Get draft links from table: https://www.pro-football-reference.com/draft/
-			# The list of all NFL draft years
-			nfl_drafts = sorted(list(range(FIRST_DRAFT_YEAR, LAST_DRAFT_YEAR + 1)), reverse=True)
+			# Get links to all NFL/AFL drafts
+			nfl_drafts = get_draft_links(driver, progress)
+
+			# sleep before making any other API calls to respect the rate limit
+			rate_limit_api_calls(API_RATE_LIMIT)
 
 			# Progress bar associated with processing all NFL drafts
 			task_nfl_drafts = progress.add_task(f'[green]Processing all NFL Drafts...', total=len(nfl_drafts))
 
 			# For each draft year, get info associated with each player drafted
-			for draft_year in nfl_drafts:
+			for draft_info in nfl_drafts:
+				draft_year, league, draft_url = draft_info
+
 				# Get players from the current year's draft.
 				# Key: draft round, Value: List of players drafted in the round
-				drafted_players: Dict[int, list[Player]] = get_drafted_players(draft_year, driver, progress)
+				drafted_players: Dict[int, list[Player]] = get_drafted_players(draft_url, draft_year, driver, progress)
 
 				# Progress bar associated with each player in the current draft.
 				total_players = [draftee for draftees in drafted_players.values() for draftee in draftees]
@@ -355,6 +401,7 @@ if __name__ == '__main__':
 					# Visit each player's pro-football reference profile for more details
 					for player in drafted_players[round]:
 						nfl_players[player] = get_player_details(player, driver, progress)
+						nfl_players[player].league = league
 
 						# Update progress bars, advancing them one player update
 						progress.update(players_in_round_task, advance=1)
@@ -362,8 +409,6 @@ if __name__ == '__main__':
 
 						# Create a row in our csv file for this player
 						writer.writerow(nfl_players[player].to_dict())
-
-						progress.console.print(f'Saved player: {nfl_players[player].to_dict()}')
 
 						# sleep before making any other API calls to respect the rate limit
 						rate_limit_api_calls(API_RATE_LIMIT)
