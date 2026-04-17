@@ -18,6 +18,7 @@ TEAMS = 'teams'
 COLLEGES = 'colleges'
 HIGH_SCHOOLS = 'high schools'
 URL = 'url'
+LEAGUE = 'league'
 
 class Player:
 	'''Information about an NFL player'''
@@ -35,6 +36,7 @@ class Player:
 	colleges: list[uuid.UUID]
 	high_schools: list[uuid.UUID]
 	url: str
+	league: str
 
 	def __init__(self, id: uuid.UUID, name: str, position: str, year: int, round: int, pick: int, team: str, url: str = ''):
 		self.id = id
@@ -48,6 +50,7 @@ class Player:
 		self.birthday = ''
 		self.birth_city = ''
 		self.birth_state = ''
+		self.league = ''
 		self.teams = []
 		self.colleges = []
 		self.high_schools = []
@@ -84,7 +87,8 @@ class Player:
 			TEAMS: [str(id) for id in self.teams],
 			COLLEGES: [str(id) for id in self.colleges],
 			HIGH_SCHOOLS: [str(id) for id in self.high_schools],
-			URL: self.url
+			URL: self.url,
+			LEAGUE: self.league
 		}
 
 	@staticmethod
@@ -106,6 +110,7 @@ class Player:
 		player.teams = [uuid.UUID(id) for id in ast.literal_eval(properties[TEAMS])]
 		player.colleges = [uuid.UUID(id) for id in ast.literal_eval(properties[COLLEGES])]
 		player.high_schools = [uuid.UUID(id) for id in ast.literal_eval(properties[HIGH_SCHOOLS])]
+		player.league = properties[LEAGUE]
 		return player
 
 	@staticmethod
@@ -124,7 +129,8 @@ class Player:
 			TEAMS,
 			COLLEGES,
 			HIGH_SCHOOLS,
-			URL
+			URL,
+			LEAGUE
 		]
 
 	def __hash__(self):
