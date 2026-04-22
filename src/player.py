@@ -97,14 +97,14 @@ class Player:
 			uuid.UUID(properties[ID]),
 			properties[NAME],
 			properties[POSITION],
-			properties[DRAFT_YEAR],
-			properties[DRAFT_ROUND],
-			properties[DRAFT_PICK],
+			int(properties[DRAFT_YEAR]),
+			int(properties[DRAFT_ROUND]),
+			int(properties[DRAFT_PICK]),
 			properties[DRAFT_TEAM],
 			properties[URL]
 		)
 
-		player.birthday = datetime.strptime(properties[BIRTHDAY], '%m-%d-%Y') if properties[BIRTHDAY] else ''
+		player.birthday = datetime.datetime.strptime(properties[BIRTHDAY], '%m-%d-%Y') if properties[BIRTHDAY] else ''
 		player.birth_city = properties[BIRTH_CITY]
 		player.birth_state = properties[BIRTH_STATE]
 		player.teams = [uuid.UUID(id) for id in ast.literal_eval(properties[TEAMS])]

@@ -55,11 +55,9 @@ class School:
 
 	@staticmethod
 	def from_dict(properties: Dict[str, str]) -> 'School':
-		school = School(uuid.UUID(properties[ID]), properties[NAME])
+		school = School(uuid.UUID(properties[ID]), properties[NAME], SchoolLevel[properties[LEVEL]], properties[URL])
 		school.city = properties[CITY]
 		school.state = properties[STATE]
-		school.level = SchoolLevel[properties[LEVEL]]
-		school.url = properties[URL]
 		school.players = [uuid.UUID(player_id) for player_id in ast.literal_eval(properties[PLAYERS])]
 		return school
 	
