@@ -15,6 +15,7 @@ from seleniumbase.core import sb_driver
 # project modules
 from player import Player
 from school import School, SchoolLevel
+from utils import load_downloaded_players, load_downloaded_schools
 
 # seconds to sleep between API calls
 API_RATE_LIMIT = 10
@@ -52,6 +53,8 @@ COLLEGE_INDEX = 26
 
 # Path to folder for output data files
 OUTPUT_DIRECTORY = 'output/'
+PLAYER_OUTPUT_FILE = f'{OUTPUT_DIRECTORY}players.csv'
+SCHOOL_OUTPUT_FILE = f'{OUTPUT_DIRECTORY}schools.csv'
 
 def rate_limit_api_calls(seconds: int) -> None:
 	time.sleep(seconds)
@@ -161,9 +164,9 @@ def get_drafted_players(url: str, year: int, driver: sb_driver.DriverMethods, pr
 		# their name in the table. Here we extract the url from this <a>
 		# anchor element in the column with a player's name.
 		url = ''
-		href = td_cols[NAME_IDX].find_element('tag name', 'a')
-		if href:
-			url = href.get_attribute('href')
+		hrefs = td_cols[NAME_IDX].find_elements('tag name', 'a')
+		if hrefs:
+			url = hrefs[0].get_attribute('href')
 
 		# Initialize a Player object with the info available from the table
 		player = Player(
@@ -355,18 +358,51 @@ if __name__ == '__main__':
 			TimeRemainingColumn(),
 			TimeElapsedColumn(),
 			MofNCompleteColumn()) as progress:
+		# Attempt to load players from the output`` CSV file
+		loaded_players = load_downloaded_players(PLAYER_OUTPUT_FILE)
 
-		# Dictionary of schools attended by drafted players
+		# Initialize a dictionary of drafted NFL players
+		nfl_players: Dict[Player, Player] = {}
+		for player in loaded_players:
+			nfl_players[player] = player
+
+		# Attempt to load schools from the output CSV file
+		loaded_schools = load_downloaded_schools(SCHOOL_OUTPUT_FILE)
+
+		# Initialize a dictionary of schools attended by drafted players
 		schools: Dict[str, School] = {}
+		for school in loaded_schools:
+			schools[school.url] = school
+
+		# If players arleady exist, identify the last draft pick
+		# so we know where to skip ahead to
+		# TODO: Rename skip_to since we're technically skipping over this pick before resuming
+		skip_to_draft_year = -1
+		skip_to_draft_pick = -1
+		if loaded_players:
+			skip_to_draft_year = loaded_players[-1].draft_year
+			skip_to_draft_pick = loaded_players[-1].draft_pick
 
 		# CSV file that acts as a database of NFL players
-		with open(f'{OUTPUT_DIRECTORY}players.csv', 'w', newline='') as players_csv:
+		with open(PLAYER_OUTPUT_FILE, 'w', newline='') as players_csv:
 			# Initialize csv dict writer and specify keys (column headers)
-			writer = csv.DictWriter(players_csv, fieldnames=Player.get_csv_columns())
-			writer.writeheader()
+			players_writer = csv.DictWriter(players_csv, fieldnames=Player.get_csv_columns())
+			players_writer.writeheader()
 
-			# Dictionary of drafted NFL players
-			nfl_players: Dict[Player, Player] = {}
+			# Write any pre-loaded players to the csv before resuming execution
+			for player in loaded_players:
+				players_writer.writerow(player.to_dict())
+
+			# Write pre-loaded schools to the csv before resuming execution
+			if loaded_schools:
+				with open(SCHOOL_OUTPUT_FILE, 'w', newline='') as schools_csv:
+					# Initialize csv dict writer and specify keys (column headers)
+					schools_writer = csv.DictWriter(schools_csv, fieldnames=School.get_csv_columns())
+					schools_writer.writeheader()
+
+					for school in loaded_schools:
+						# Create a row in our csv file for this player
+						schools_writer.writerow(school.to_dict())
 
 			# Get links to all NFL/AFL drafts
 			nfl_drafts = get_draft_links(driver, progress)
@@ -381,6 +417,12 @@ if __name__ == '__main__':
 			for draft_info in nfl_drafts:
 				draft_year, league, draft_url = draft_info
 
+				# If we have already have an output file with players, we want to pick up
+				# where the previous script execution ended. So we skip all draft years 
+				# after the last draft year that appears in the output file.
+				if skip_to_draft_year >= 0 and draft_year > skip_to_draft_year:
+					continue
+
 				# Get players from the current year's draft.
 				# Key: draft round, Value: List of players drafted in the round
 				drafted_players: Dict[int, list[Player]] = get_drafted_players(draft_url, draft_year, driver, progress)
@@ -392,6 +434,12 @@ if __name__ == '__main__':
 				# sleep before making any other API calls to respect the rate limit
 				rate_limit_api_calls(API_RATE_LIMIT)
 
+				# player to skip to if we've already downloaded some player profiles
+				if draft_year == skip_to_draft_year:
+					skip_to = skip_to_draft_pick if skip_to_draft_pick > 1 else 0
+				else:
+					skip_to = 0
+
 				# Iterate round by round through all players in the current year's draft
 				# to check for more detailed info on their profile page.
 				for round in sorted(drafted_players.keys()):
@@ -400,6 +448,13 @@ if __name__ == '__main__':
 
 					# Visit each player's pro-football reference profile for more details
 					for player in drafted_players[round]:
+						# Don't process players before the pick we want to skip to
+						if player.draft_pick <= skip_to:
+							# Update progress bars, advancing them one player update
+							progress.update(players_in_round_task, advance=1)
+							progress.update(task_total_players, advance=1)
+							continue
+
 						nfl_players[player] = get_player_details(player, driver, progress)
 						nfl_players[player].league = league
 
@@ -408,23 +463,26 @@ if __name__ == '__main__':
 						progress.update(task_total_players, advance=1)
 
 						# Create a row in our csv file for this player
-						writer.writerow(nfl_players[player].to_dict())
+						players_writer.writerow(nfl_players[player].to_dict())
+
+						# CSV file that acts as a database of schools.
+						# Rewrite this file in its entirety after each new player is saved since
+						# an already existing school was updated.
+						# Probably not the most efficient, but we move.
+						with open(SCHOOL_OUTPUT_FILE, 'w', newline='') as schools_csv:
+							# Initialize csv dict writer and specify keys (column headers)
+							schools_writer = csv.DictWriter(schools_csv, fieldnames=School.get_csv_columns())
+							schools_writer.writeheader()
+
+							for key in schools:
+								# Create a row in our csv file for this player
+								schools_writer.writerow(schools[key].to_dict())
 
 						# sleep before making any other API calls to respect the rate limit
 						rate_limit_api_calls(API_RATE_LIMIT)
 
 				# Update progress bar, advancing one completed NFL draft
 				progress.update(task_nfl_drafts, advance=1)
-
-		# CSV file that acts as a database of schools
-		with open(f'{OUTPUT_DIRECTORY}schools.csv', 'w', newline='') as schools_csv:
-			# Initialize csv dict writer and specify keys (column headers)
-			writer = csv.DictWriter(schools_csv, fieldnames=School.get_csv_columns())
-			writer.writeheader()
-
-			for key in schools:
-				# Create a row in our csv file for this player
-				writer.writerow(schools[key].to_dict())
 
 	# close the browser and end the session
 	driver.quit()
