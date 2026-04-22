@@ -3,3 +3,8 @@
 
 # web driver lock files
 downloaded_files
+
+# archived output
+src/output/archive
+
+.DS_Store
